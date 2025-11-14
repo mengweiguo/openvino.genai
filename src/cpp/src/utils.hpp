@@ -194,7 +194,8 @@ struct KVDesc {
 std::pair<ov::CompiledModel, KVDesc> compile_decoder_for_npu(const std::shared_ptr<ov::Model>& model,
                                                              const ov::AnyMap& config,
                                                              const KVAxesPosition& kv_pos,
-                                                             const bool is_whisper = false);
+                                                             const bool is_whisper = false,
+                                                             const bool is_text_embed = false);
 
 /// @brief SharedOptional is a wrapper around a reference to an existing object and an optional shared alternative value.
 /// The difference from std::optional is that the default state is not empty and contains a reference to an existing object outside the class.

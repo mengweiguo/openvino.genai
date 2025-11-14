@@ -116,6 +116,29 @@ void update_npu_config_whisper(ov::AnyMap& config,
     update_config(config, {"NPUW_LLM_PREFILL_HINT", "STATIC"});
 }
 
+void update_npu_config_text_embedding(ov::AnyMap& config,
+                               const ov::genai::utils::KVAxesPosition& kv_pos,
+                               const ov::genai::utils::KVDesc& kv_desc) {
+    update_config(config, {"NPU_USE_NPUW", "YES"});
+    update_config(config, {"NPUW_ONLINE_PIPELINE", "NONE"});
+    update_config(config, {"NPUW_FUNCALL_FOR_ALL", "NO"});
+    update_config(config, {"NPUW_FOLD", "NO"});
+    update_config(config, {"NPUW_LLM", "YES"});
+    update_config(config, {"NPUW_TEXT_EMBED", "YES"});
+
+    update_config(config, {"NPUW_LLM_BATCH_DIM", kv_pos.batch});
+    update_config(config, {"NPUW_LLM_SEQ_LEN_DIM", kv_pos.seq_len});
+
+    update_config(config, {"NPUW_LLM_MAX_PROMPT_LEN", kv_desc.max_prompt_len});
+    update_config(config, {"NPUW_LLM_MIN_RESPONSE_LEN", kv_desc.min_response_len});
+    update_config(config, {"NPUW_LLM_SHARED_HEAD", "NO"});
+
+    // To disable chunking
+    update_config(config, {"NPUW_LLM_PREFILL_HINT", "STATIC"});
+    update_config(config, {"NPUW_LLM_PREFILL_CHUNK_SIZE", "0"});
+    update_config(config, {"NPUW_LLM_CACHE_ROPE", "NO"});
+}
+
 inline bool is_paged_attention_available() {
 #if defined(OPENVINO_ARCH_X86_64) || defined(OPENVINO_ARCH_ARM64)
     return true;
@@ -574,7 +597,7 @@ std::pair<ov::CompiledModel, KVDesc>
 compile_decoder_for_npu(const std::shared_ptr<ov::Model>& model,
                         const ov::AnyMap& config,
                         const KVAxesPosition& kv_pos,
-                        const bool is_whisper) {
+                        const bool is_whisper, const bool is_text_embed) {
     ov::CompiledModel compiled;
     ov::AnyMap properties = config;
     KVDesc kv_desc;
@@ -600,11 +623,16 @@ compile_decoder_for_npu(const std::shared_ptr<ov::Model>& model,
             // kvcache size for Whisper = 448u (MAX_PROMPT_LEN + MIN_RESPONSE_LEN)
             kv_desc.min_response_len = pop_int_and_cast(properties, "MIN_RESPONSE_LEN").value_or(444u);
             update_npu_config_whisper(properties, kv_pos, kv_desc);
+        } else if (is_text_embed) {
+            kv_desc.max_prompt_len = pop_int_and_cast(properties, "MAX_PROMPT_LEN").value_or(256u);
+            kv_desc.min_response_len = pop_int_and_cast(properties, "MIN_RESPONSE_LEN").value_or(256u);
+            update_npu_config_text_embedding(properties, kv_pos, kv_desc);
         } else {
             kv_desc.max_prompt_len = pop_int_and_cast(properties, "MAX_PROMPT_LEN").value_or(1024u);
             kv_desc.min_response_len = pop_int_and_cast(properties, "MIN_RESPONSE_LEN").value_or(128u);
             update_npu_config(properties, kv_pos, kv_desc);
         }
+
         compiled = ov::genai::utils::singleton_core().compile_model(model, "NPU", properties);
         // Also export compiled model if required
         if (export_blob) {
