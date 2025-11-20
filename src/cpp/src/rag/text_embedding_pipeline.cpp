@@ -216,26 +216,28 @@ public:
             reshape_model(model);
         }
 
+        if (m_config.max_length) {
+            m_tokenization_params.insert({max_length.name(), *m_config.max_length});
+        }
+
+        if (m_config.pad_to_max_length) {
+            m_tokenization_params.insert({pad_to_max_length.name(), *m_config.pad_to_max_length});
+        }
+
+        std::cout << "In TextEmbeddingPipelineImpl" << std::endl;
+
+        if (m_config.padding_side) {
+            std::cout << "padding_side: " << *m_config.padding_side << std::endl;
+            m_tokenization_params.insert({padding_side.name(), *m_config.padding_side});
+        }
+
         ov::CompiledModel compiled_model;
         if (device == "NPU" && model->is_dynamic()) {
                 auto kv_pos = ov::genai::utils::get_kv_axes_pos(model);
                 utils::KVDesc kv_desc;
                 std::tie(compiled_model, kv_desc) = utils::compile_decoder_for_npu(model, properties, kv_pos, false, true);
         } else {
-            model = apply_postprocessing(model, m_config);
-
-            if (m_config.max_length) {
-                m_tokenization_params.insert({max_length.name(), *m_config.max_length});
-            }
-
-            if (m_config.pad_to_max_length) {
-                m_tokenization_params.insert({pad_to_max_length.name(), *m_config.pad_to_max_length});
-            }
-
-            if (m_config.padding_side) {
-                m_tokenization_params.insert({padding_side.name(), *m_config.padding_side});
-            }
-
+            // model = apply_postprocessing(model, m_config);
             compiled_model = core.compile_model(model, device, properties);
         }
 
@@ -337,6 +339,10 @@ private:
         m_request.set_tensor("input_ids", encoded.input_ids);
         m_request.set_tensor("attention_mask", encoded.attention_mask);
 
+        // auto position_ids = ov::Tensor{ov::element::i64, encoded.input_ids.get_shape()};
+        // utils::initialize_position_ids(position_ids, encoded.attention_mask);
+        // m_request.set_tensor("position_ids", position_ids);
+
         // fill token_type_ids
         // todo: pass token_type_ids from tokenizer
         if (has_token_type_ids_input(m_request.get_compiled_model().inputs())) {
@@ -383,6 +389,28 @@ private:
 
         std::vector<std::vector<float>> result;
         const auto shape = last_hidden_state.get_shape();
+
+        std::cout << "Result shape: "<< std::endl;
+        for (auto dim : shape) {
+            std::cout << dim << std::endl;
+        }
+
+{
+        const auto bin_path = std::string("genai_last_hidden_state_final") + std::string(".bin");
+        {
+            std::ofstream bin_file(bin_path, std::ios_base::out | std::ios_base::binary);
+            auto blob_size = last_hidden_state.get_byte_size();
+            if (blob_size > static_cast<decltype(blob_size)>(std::numeric_limits<std::streamsize>::max())) {
+                OPENVINO_THROW("Blob size is too large to be represented on a std::streamsize!");
+            }
+            bin_file.write(static_cast<const char*>(last_hidden_state.data()), static_cast<std::streamsize>(blob_size));
+        }
+        const auto meta_path = std::string("genai_last_hidden_state_final") + std::string(".txt");
+        {
+            std::ofstream meta_file(meta_path);
+            meta_file << last_hidden_state.get_element_type() << ' ' << last_hidden_state.get_shape() << std::endl;
+        }
+}
 
         const size_t batch_size = shape[0];
         const size_t hidden_size = shape[1];

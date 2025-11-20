@@ -120,9 +120,9 @@ void update_npu_config_text_embedding(ov::AnyMap& config,
                                const ov::genai::utils::KVAxesPosition& kv_pos,
                                const ov::genai::utils::KVDesc& kv_desc) {
     update_config(config, {"NPU_USE_NPUW", "YES"});
-    update_config(config, {"NPUW_ONLINE_PIPELINE", "NONE"});
-    update_config(config, {"NPUW_FUNCALL_FOR_ALL", "NO"});
-    update_config(config, {"NPUW_FOLD", "NO"});
+    // update_config(config, {"NPUW_ONLINE_PIPELINE", "NONE"});
+    // update_config(config, {"NPUW_FUNCALL_FOR_ALL", "NO"});
+    // update_config(config, {"NPUW_FOLD", "NO"});
     update_config(config, {"NPUW_LLM", "YES"});
     update_config(config, {"NPUW_TEXT_EMBED", "YES"});
 
@@ -134,8 +134,8 @@ void update_npu_config_text_embedding(ov::AnyMap& config,
     update_config(config, {"NPUW_LLM_SHARED_HEAD", "NO"});
 
     // To disable chunking
-    update_config(config, {"NPUW_LLM_PREFILL_HINT", "STATIC"});
-    update_config(config, {"NPUW_LLM_PREFILL_CHUNK_SIZE", "0"});
+    // update_config(config, {"NPUW_LLM_PREFILL_HINT", "STATIC"});
+    // update_config(config, {"NPUW_LLM_PREFILL_CHUNK_SIZE", "0"});
     update_config(config, {"NPUW_LLM_CACHE_ROPE", "NO"});
 }
 
@@ -601,6 +601,9 @@ compile_decoder_for_npu(const std::shared_ptr<ov::Model>& model,
     ov::CompiledModel compiled;
     ov::AnyMap properties = config;
     KVDesc kv_desc;
+
+    OPENVINO_ASSERT((is_whisper && is_text_embed) == false,
+        "Only one specific model type can be assigned");
 
     auto blob_path = pop_or_default(properties, "BLOB_PATH", std::string{});
     const auto export_blob = pop_or_default(properties, "EXPORT_BLOB", false);
