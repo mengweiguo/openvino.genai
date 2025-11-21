@@ -211,11 +211,6 @@ public:
 
         auto model = core.read_model(models_path / "openvino_model.xml", {}, properties);
 
-        const bool should_reshape = m_config.batch_size.has_value() && m_config.max_length.has_value();
-        if (should_reshape) {
-            reshape_model(model);
-        }
-
         bool is_fixed_size = true;
         if (m_config.max_length) {
             m_tokenization_params.insert({max_length.name(), *m_config.max_length});
@@ -237,6 +232,12 @@ public:
             if (m_config.padding_side.value() == "left") {
                 is_padding_on_left = true;
             }
+        }
+
+        bool should_reshape = device != "NPU" && (m_config.batch_size.has_value() || m_config.max_length.has_value());
+        should_reshape |= device == "NPU" && m_config.batch_size.has_value() && m_config.max_length.has_value() && m_config.pad_to_max_length.has_value() && m_config.pad_to_max_length.value();
+        if (should_reshape) {
+            reshape_model(model);
         }
 
         ov::CompiledModel compiled_model;
