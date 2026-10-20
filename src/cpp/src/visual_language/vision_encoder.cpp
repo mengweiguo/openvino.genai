@@ -153,7 +153,7 @@ VisionEncoder::Ptr VisionEncoder::create(const std::filesystem::path& model_dir,
         return std::make_shared<VisionEncoderDeepseekOCR2>(model_dir, device, properties);
     } else if (model_type == VLMModelType::MUSE_GLIMMER) {
         return std::make_shared<VisionEncoderMuseGlimmer>(model_dir, device, properties);
-    } else if (model_type == VLMModelType::MINICPMV4_7) {
+    } else if (model_type == VLMModelType::MINICPMV4_7 || model_type == VLMModelType::MINICPM_OCR) {
         return std::make_shared<VisionEncoderMiniCPMv4_7>(model_dir, device, properties);
     } else {
         OPENVINO_THROW("Unsupported model type in VLM VisionEncoder class. Please, create feature request on new model support");
@@ -206,7 +206,7 @@ VisionEncoder::Ptr VisionEncoder::create(
         return std::make_shared<VisionEncoderDeepseekOCR2>(models_map, config_dir_path, device, device_config);
     } else if (model_type == VLMModelType::MUSE_GLIMMER) {
         return std::make_shared<VisionEncoderMuseGlimmer>(models_map, config_dir_path, device, device_config);
-    } else if (model_type == VLMModelType::MINICPMV4_7) {
+    } else if (model_type == VLMModelType::MINICPMV4_7 || model_type == VLMModelType::MINICPM_OCR) {
         return std::make_shared<VisionEncoderMiniCPMv4_7>(models_map, config_dir_path, device, device_config);
     } else {
         OPENVINO_THROW("Unsupported model type in VLM VisionEncoder class. Please, create feature request on new model support");

@@ -22,8 +22,21 @@ size_t calc_vision_downsample_factor(const size_t window_kernel_size, const size
     return window_kernel_size * merge_kernel_size;
 }
 
+// The "4x" downsample mode leaves the ViT window merger out, which is a window of 1 patch.
+size_t get_window_kernel_size(const VLMConfig& vlm_config) {
+    if (vlm_config.downsample_mode == "4x") {
+        return 1;
+    }
+    OPENVINO_ASSERT(vlm_config.downsample_mode == "16x",
+                    "Unsupported downsample_mode '",
+                    vlm_config.downsample_mode,
+                    "'. Supported modes: '4x', '16x'");
+    return vlm_config.vision_config_window_kernel_size;
+}
+
+// Rounds half to even like Python's round() to match the HF image processor.
 int ensure_divide(const double length, const int divisor) {
-    return std::max(static_cast<int>(std::round(length / divisor)) * divisor, divisor);
+    return std::max(static_cast<int>(std::nearbyint(length / divisor)) * divisor, divisor);
 }
 
 // Picks the size for resizing a crop (thumbnail or slice). Keeps aspect ratio and targets
@@ -33,16 +46,18 @@ ImageSize find_best_resize(
     const double width,
     const int scale_resolution,
     const int patch_size,
+    const size_t downsample_factor,
     const bool allow_upscale
 ) {
     double new_height = height;
     double new_width = width;
     if (height * width > static_cast<double>(scale_resolution) * scale_resolution || allow_upscale) {
         const double aspect_ratio = width / height;
-        new_height = scale_resolution / std::sqrt(aspect_ratio);
-        new_width = new_height * aspect_ratio;
+        // truncate like the HF image processor: the width follows the truncated height
+        new_height = std::trunc(scale_resolution / std::sqrt(aspect_ratio));
+        new_width = std::trunc(new_height * aspect_ratio);
     }
-    const int factor = patch_size * 4;
+    const int factor = patch_size * static_cast<int>(downsample_factor);
     return {
         static_cast<size_t>(ensure_divide(new_height, factor)),
         static_cast<size_t>(ensure_divide(new_width, factor))};
@@ -87,7 +102,8 @@ ImageSize get_refine_size(
     const int width,
     const SlicesGrid& grid,
     const int scale_resolution,
-    const int patch_size
+    const int patch_size,
+    const size_t downsample_factor
 ) {
     const int grid_rows = static_cast<int>(grid.rows);
     const int grid_cols = static_cast<int>(grid.cols);
@@ -99,6 +115,7 @@ ImageSize get_refine_size(
         static_cast<double>(refine_width) / grid_cols,
         scale_resolution,
         patch_size,
+        downsample_factor,
         allow_upscale
     );
     return {best.height * grid.rows, best.width * grid.cols};
@@ -152,13 +169,14 @@ SlicedImage slice_image(const clip_image_u8& source, const ProcessorConfig& conf
     const size_t patch_side = config.patch_size;
     const int scale_resolution = static_cast<int>(config.scale_resolution);
     const int max_slice_nums = static_cast<int>(config.max_slice_nums);
+    const size_t downsample_factor = calc_vision_downsample_factor(config.window_kernel_size, config.merge_kernel_size);
     const int height = source.ny;
     const int width = source.nx;
 
     const SlicesGrid slices_grid = get_slices_grid(height, width, max_slice_nums, scale_resolution);
 
     const bool allow_upscale = !slices_grid.has_slices();
-    const ImageSize thumbnail_size = find_best_resize(height, width, scale_resolution, patch_size, allow_upscale);
+    const ImageSize thumbnail_size = find_best_resize(height, width, scale_resolution, patch_size, downsample_factor, allow_upscale);
     clip_image_u8 thumbnail;
     bicubic_resize(source, thumbnail, static_cast<int>(thumbnail_size.width), static_cast<int>(thumbnail_size.height));
 
@@ -167,7 +185,7 @@ SlicedImage slice_image(const clip_image_u8& source, const ProcessorConfig& conf
     result.crop_sizes.push_back({thumbnail_size.height / patch_side, thumbnail_size.width / patch_side});
 
     if (slices_grid.has_slices()) {
-        const ImageSize refine_size = get_refine_size(height, width, slices_grid, scale_resolution, patch_size);
+        const ImageSize refine_size = get_refine_size(height, width, slices_grid, scale_resolution, patch_size, downsample_factor);
         clip_image_u8 refine_img;
         bicubic_resize(source, refine_img, static_cast<int>(refine_size.width), static_cast<int>(refine_size.height));
         const int slice_h = static_cast<int>(refine_size.height / slices_grid.rows);
@@ -436,6 +454,17 @@ std::pair<ov::Tensor, int64_t> create_position_ids(
     return {position_ids, rope_delta};
 }
 
+// Builds [3, 1, seq_len] position ids with the same sequential positions on all three M-RoPE axes
+// and zero rope delta. Visual tokens take plain text positions.
+std::pair<ov::Tensor, int64_t> create_text_position_ids(const size_t seq_len) {
+    ov::Tensor position_ids{ov::element::i64, {3, 1, seq_len}};
+    for (size_t dim = 0; dim < 3; ++dim) {
+        int64_t* data = position_ids.data<int64_t>() + dim * seq_len;
+        std::iota(data, data + seq_len, 0);
+    }
+    return {position_ids, 0};
+}
+
 }  // namespace
 
 VisionEncoderMiniCPMv4_7::VisionEncoderMiniCPMv4_7(
@@ -458,7 +487,7 @@ void VisionEncoderMiniCPMv4_7::update_vision_config(const VLMConfig& vlm_config)
          {static_cast<ProcessorConfig*>(&m_processor_config),
           static_cast<ProcessorConfig*>(&m_video_processor_config)}) {
         config->image_size = vlm_config.vision_config_image_size;
-        config->window_kernel_size = vlm_config.vision_config_window_kernel_size;
+        config->window_kernel_size = get_window_kernel_size(vlm_config);
         config->merge_kernel_size = vlm_config.merge_kernel_size;
     }
 }
@@ -491,7 +520,10 @@ ov::Tensor VisionEncoderMiniCPMv4_7::encode_crops(
             pack_crop(crops[i], crop_size, config.image_mean, config.image_std, config.patch_size)
         );
         encoder.set_tensor("position_ids", build_vision_position_ids(crop_size, num_patches_per_side));
-        encoder.set_tensor("window_index", build_window_index(crop_size, window_kernel_size));
+        if (window_kernel_size > 1) {
+            // the graph has no window_index input when the ViT window merger is left out ("4x" mode)
+            encoder.set_tensor("window_index", build_window_index(crop_size, window_kernel_size));
+        }
         encoder.set_tensor("merge_index", build_merge_index(crop_size, window_kernel_size, merge_kernel_size));
         encoder.infer();
 
@@ -625,7 +657,7 @@ NormalizedPrompt InputsEmbedderMiniCPMv4_7::normalize_prompt(
     const std::vector<EncodedVideo>& videos
 ) const {
     const size_t downsample_factor =
-        calc_vision_downsample_factor(m_vlm_config.vision_config_window_kernel_size, m_vlm_config.merge_kernel_size);
+        calc_vision_downsample_factor(get_window_kernel_size(m_vlm_config), m_vlm_config.merge_kernel_size);
 
     auto repeat = [](const std::string& str, size_t count) {
         std::string result;
@@ -740,17 +772,21 @@ ov::Tensor InputsEmbedderMiniCPMv4_7::get_inputs_embeds(
     EmbeddingsRequest& req = embeddings_request_guard.get();
     ov::Tensor text_embeds = get_text_embedding(req, input_ids, metrics);
 
-    const size_t downsample_factor = calc_vision_downsample_factor(m_vlm_config.vision_config_window_kernel_size, m_vlm_config.merge_kernel_size);
+    const size_t downsample_factor = calc_vision_downsample_factor(get_window_kernel_size(m_vlm_config), m_vlm_config.merge_kernel_size);
     const auto images_crop_sizes = flatten_images_crop_sizes(images, image_sequence);
     const auto videos_crop_sizes = flatten_videos_crop_sizes(videos, videos_sequence);
-    std::tie(m_position_ids, m_rope_delta) = create_position_ids(
-        input_ids,
-        images_crop_sizes,
-        videos_crop_sizes,
-        m_image_token_id,
-        m_video_token_id,
-        downsample_factor
-    );
+    if (m_vlm_config.model_type == VLMModelType::MINICPM_OCR) {
+        std::tie(m_position_ids, m_rope_delta) = create_text_position_ids(input_ids.get_size());
+    } else {
+        std::tie(m_position_ids, m_rope_delta) = create_position_ids(
+            input_ids,
+            images_crop_sizes,
+            videos_crop_sizes,
+            m_image_token_id,
+            m_video_token_id,
+            downsample_factor
+        );
+    }
 
     // Non-owning view per crop for image embeds
     std::vector<ov::Tensor> image_embeds;
