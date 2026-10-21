@@ -35,6 +35,7 @@ enum class VLMModelType {
     DEEPSEEK_OCR2,
     MUSE_GLIMMER,
     MINICPMV4_7,
+    MINICPM_OCR,
 };
 
 /// @brief A Configuration class passed to VLMPipeline and used to
@@ -143,6 +144,9 @@ public:
     size_t vision_config_window_kernel_size = 2;
     /// @brief Merge kernel size for downsample MLP merge.
     size_t merge_kernel_size = 2;
+    /// @brief Visual token downsampling mode: "16x" applies the ViT window merger and the downsample MLP merge,
+    /// "4x" applies the downsample MLP merge only.
+    std::string downsample_mode = "16x";
 
     // Qwen3-VL specific config
     /// @brief Number of position embeddings in vision encoder for Qwen3-VL model.
